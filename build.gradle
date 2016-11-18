@@ -582,8 +582,6 @@ project(':examples') {
   }
 }
 
-def grpcVersion = '1.0.1' // CURRENT_GRPC_VERSION
-
 project(':clients') {
   archivesBaseName = "kafka-clients"
 
@@ -591,9 +589,10 @@ project(':clients') {
     compile libs.lz4
     compile libs.snappy
     compile libs.slf4jApi
-    compile "io.grpc:grpc-netty:${grpcVersion}"
-    compile "io.grpc:grpc-protobuf:${grpcVersion}"
-    compile "io.grpc:grpc-stub:${grpcVersion}"
+    compile "com.google.protobuf:protobuf-java:3.0.0"
+    compile "io.grpc:grpc-protobuf:1.0.1"
+    compile "io.grpc:grpc-stub:1.0.1"
+    compile group: 'com.google.apis', name: 'google-api-services-pubsub', version: 'v1-rev14-1.22.0'
 
     testCompile libs.bcpkix
     testCompile libs.junit
