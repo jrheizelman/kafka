@@ -37,6 +37,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -56,7 +57,7 @@ public class PubsubSender implements Runnable {
     /* the grpc stub to send records to pubsub */
     private final PublisherGrpc.PublisherFutureStub stub;
 
-    private final ThreadPoolExecutor callbackExecutor;
+    private final ThreadPoolExecutor executor;
 
     /* the flag indicating whether the producer should guarantee the message order on the broker or not. */
     private final boolean guaranteeMessageOrder;
@@ -100,7 +101,7 @@ public class PubsubSender implements Runnable {
         this.requestTimeout = requestTimeout;
         this.stub = PublisherGrpc.newFutureStub(channel)
                 .withDeadlineAfter(requestTimeout, TimeUnit.MILLISECONDS);
-        this.callbackExecutor = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60L, TimeUnit.SECONDS,
+        this.executor = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60L, TimeUnit.SECONDS,
                 new SynchronousQueue<Runnable>());
     }
 
@@ -122,7 +123,7 @@ public class PubsubSender implements Runnable {
         // okay we stopped accepting requests but there may still be
         // requests in the accumulator or waiting for acknowledgment,
         // wait until these are completed.
-        while (!forceClose && (this.accumulator.hasUnsent() || this.callbackExecutor.getActiveCount() > 0)) {
+        while (!forceClose && (this.accumulator.hasUnsent() || this.executor.getActiveCount() > 0)) {
             try {
                 run(time.milliseconds());
             } catch (Exception e) {
@@ -135,7 +136,7 @@ public class PubsubSender implements Runnable {
             this.accumulator.abortIncompleteBatches();
         }
         try {
-            this.callbackExecutor.shutdown();
+            this.executor.shutdown();
         } catch (Exception e) {
             log.error("Failed to close network client", e);
         }
@@ -150,9 +151,9 @@ public class PubsubSender implements Runnable {
      *            The current POSIX time in milliseconds
      */
     void run(long now) {
-        PubsubAccumulator.ReadyCheckResult result = this.accumulator.ready(now);
+        Set<String> readyTopics = this.accumulator.ready(now);
         // create produce requests
-        Map<String, List<PubsubBatch>> batches = this.accumulator.drain(result.readyTopics, this.maxRequestSize, now);
+        Map<String, List<PubsubBatch>> batches = this.accumulator.drain(readyTopics, this.maxRequestSize, now);
         if (guaranteeMessageOrder) {
             // Mute all the partitions drained
             for (List<PubsubBatch> batchList : batches.values()) {
@@ -168,8 +169,8 @@ public class PubsubSender implements Runnable {
 
         sensors.updateProduceRequestMetrics(batches);
 
-        if (!result.readyTopics.isEmpty()) {
-            log.trace("Topics with data ready to send: {}", result.readyTopics);
+        if (!readyTopics.isEmpty()) {
+            log.trace("Topics with data ready to send: {}", readyTopics);
         }
         sendProduceRequests(batches, now);
     }
@@ -251,19 +252,20 @@ public class PubsubSender implements Runnable {
             final PublishRequest.Builder request = PublishRequest.newBuilder().setTopic(batch.topic);
             request.addMessages(PubsubMessage.newBuilder()
                     .setData(ByteString.copyFrom(batch.records.buffer())));
-            callbackExecutor.submit(new Runnable() {
+            executor.submit(new Runnable() {
                 public void run() {
                     long receivedTime = System.currentTimeMillis();
                     try {
                         PublishResponse response = stub.publish(request.build()).get(timeout, TimeUnit.MILLISECONDS);
                         log.trace("Receved produce response from topic {}", batch.topic);
-                        sensors.recordLatency(batch.topic, receivedTime - sendTime);
-                        completeBatch(batch, Errors.NONE,
-                                response.getMessageIdsBytes(0).asReadOnlyByteBuffer().getLong(), receivedTime);
+                        String id = response.getMessageIds(0);
+                        long offset = Long.valueOf(id);
+                        completeBatch(batch, Errors.NONE, offset, receivedTime);
                     } catch (ExecutionException | InterruptedException | TimeoutException e) {
 //                        TODO(jrheizelman): Complete batch call
 //                        completeBatch(batch, Errors.NETWORK_EXCEPTION, -1L, Record.NO_TIMESTAMP, now);
                     }
+                    sensors.recordLatency(batch.topic, receivedTime - sendTime);
                 }
             });
             log.trace("Sent produce request to topic {}", batch.topic);
@@ -344,7 +346,7 @@ public class PubsubSender implements Runnable {
             m = metrics.metricName("requests-in-flight", metricGrpName, "The current number of in-flight requests awaiting a response.");
             this.metrics.addMetric(m, new Measurable() {
                 public double measure(MetricConfig config, long now) {
-                    return callbackExecutor.getActiveCount();
+                    return executor.getActiveCount();
                 }
             });
         }

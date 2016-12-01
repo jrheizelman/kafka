@@ -17,6 +17,7 @@ import java.util.List;
 
 import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.TimeoutException;
 import org.apache.kafka.common.record.MemoryRecords;
 import org.apache.kafka.common.record.Record;
@@ -42,6 +43,7 @@ public final class PubsubBatch {
     public final ProduceRequestResult produceFuture;
     public long lastAppendTime;
     public String topic;
+
     private final List<Thunk> thunks;
     private long offsetCounter = 0L;
     private boolean retry;
@@ -88,7 +90,7 @@ public final class PubsubBatch {
      * @param exception The exception that occurred (or null if the request was successful)
      */
     public void done(long baseOffset, long timestamp, RuntimeException exception) {
-        // TODO(jrheizelman): Check if null TopicPartition is acceptable here
+        TopicPartition tp = new TopicPartition(topic, 0);
         log.trace("Produced messages with base offset offset {} and error: {}.",
                 baseOffset,
                 exception);
@@ -98,7 +100,7 @@ public final class PubsubBatch {
                 Thunk thunk = this.thunks.get(i);
                 if (exception == null) {
                     // If the timestamp returned by server is NoTimestamp, that means CreateTime is used. Otherwise LogAppendTime is used.
-                    RecordMetadata metadata = new RecordMetadata(null,  baseOffset, thunk.future.relativeOffset(),
+                    RecordMetadata metadata = new RecordMetadata(tp,  baseOffset, thunk.future.relativeOffset(),
                             timestamp == Record.NO_TIMESTAMP ? thunk.future.timestamp() : timestamp,
                             thunk.future.checksum(),
                             thunk.future.serializedKeySize(),
@@ -108,10 +110,10 @@ public final class PubsubBatch {
                     thunk.callback.onCompletion(null, exception);
                 }
             } catch (Exception e) {
-                log.error("Error executing user-provided callback on message:", e);
+                log.error("Error executing user-provided callback on message for topic {}:", topic, e);
             }
         }
-        this.produceFuture.done(null, baseOffset, exception);
+        this.produceFuture.done(tp, baseOffset, exception);
     }
 
     /**

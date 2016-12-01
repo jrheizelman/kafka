@@ -290,7 +290,7 @@ public final class PubsubAccumulator {
      * </ul>
      * </ol>
      */
-    public ReadyCheckResult ready(long nowMs) {
+    public Set<String> ready(long nowMs) {
         Set<String> readyTopics = new HashSet<>();
         long nextReadyCheckDelayMs = Long.MAX_VALUE;
 
@@ -323,7 +323,7 @@ public final class PubsubAccumulator {
             }
         }
 
-        return new PubsubAccumulator.ReadyCheckResult(readyTopics);
+        return readyTopics;
     }
 
     /**
@@ -509,17 +509,6 @@ public final class PubsubAccumulator {
             this.future = future;
             this.batchIsFull = batchIsFull;
             this.newBatchCreated = newBatchCreated;
-        }
-    }
-
-    /*
-     * The set of nodes that have at least one complete record batch in the accumulator
-     */
-    public final static class ReadyCheckResult {
-        public final Set<String> readyTopics;
-
-        public ReadyCheckResult(Set<String> readyTopics) {
-            this.readyTopics = readyTopics;
         }
     }
 
