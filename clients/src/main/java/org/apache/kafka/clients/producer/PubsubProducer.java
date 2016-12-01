@@ -34,6 +34,7 @@ import org.apache.kafka.common.metrics.MetricConfig;
 import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.common.metrics.MetricsReporter;
 import org.apache.kafka.common.metrics.Sensor;
+import org.apache.kafka.common.network.Selectable;
 import org.apache.kafka.common.record.CompressionType;
 import org.apache.kafka.common.record.Record;
 import org.apache.kafka.common.record.Records;
@@ -45,6 +46,7 @@ import org.apache.kafka.common.utils.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.SocketOptions;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -138,68 +140,60 @@ public class PubsubProducer<K, V> implements Producer<K, V> {
 
     @SuppressWarnings({"unchecked", "deprecation"})
     private PubsubProducer(ProducerConfig config, Serializer<K> keySerializer, Serializer<V> valueSerializer) {
-        try {
-            log.trace("Starting the Kafka producer");
-            Map<String, Object> userProvidedConfigs = config.originals();
-            this.producerConfig = config;
-            this.time = new SystemTime();
+        log.trace("Starting the Kafka producer");
+        Map<String, Object> userProvidedConfigs = config.originals();
+        this.producerConfig = config;
+        this.time = new SystemTime();
 
-            clientId = config.getString(ProducerConfig.CLIENT_ID_CONFIG);
-            if (clientId.length() <= 0)
-                clientId = "producer-" + PRODUCER_CLIENT_ID_SEQUENCE.getAndIncrement();
-            Map<String, String> metricTags = new LinkedHashMap<String, String>();
-            metricTags.put("client-id", clientId);
-            MetricConfig metricConfig = new MetricConfig().samples(config.getInt(ProducerConfig.METRICS_NUM_SAMPLES_CONFIG))
-                    .timeWindow(config.getLong(ProducerConfig.METRICS_SAMPLE_WINDOW_MS_CONFIG), TimeUnit.MILLISECONDS)
-                    .tags(metricTags);
-            List<MetricsReporter> reporters = config.getConfiguredInstances(ProducerConfig.METRIC_REPORTER_CLASSES_CONFIG,
-                    MetricsReporter.class);
-            reporters.add(new JmxReporter(JMX_PREFIX));
-            this.metrics = new Metrics(metricConfig, reporters, time);
-            long retryBackoffMs = config.getLong(ProducerConfig.RETRY_BACKOFF_MS_CONFIG);
-            if (keySerializer == null) {
-                this.keySerializer = config.getConfiguredInstance(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
-                        Serializer.class);
-                this.keySerializer.configure(config.originals(), true);
-            } else {
-                config.ignore(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG);
-                this.keySerializer = keySerializer;
-            }
-            if (valueSerializer == null) {
-                this.valueSerializer = config.getConfiguredInstance(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
-                        Serializer.class);
-                this.valueSerializer.configure(config.originals(), false);
-            } else {
-                config.ignore(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG);
-                this.valueSerializer = valueSerializer;
-            }
+        clientId = config.getString(ProducerConfig.CLIENT_ID_CONFIG);
+        if (clientId.length() <= 0)
+            clientId = "producer-" + PRODUCER_CLIENT_ID_SEQUENCE.getAndIncrement();
+        Map<String, String> metricTags = new LinkedHashMap<String, String>();
+        metricTags.put("client-id", clientId);
+        MetricConfig metricConfig = new MetricConfig().samples(config.getInt(ProducerConfig.METRICS_NUM_SAMPLES_CONFIG))
+                .timeWindow(config.getLong(ProducerConfig.METRICS_SAMPLE_WINDOW_MS_CONFIG), TimeUnit.MILLISECONDS)
+                .tags(metricTags);
+        List<MetricsReporter> reporters = config.getConfiguredInstances(ProducerConfig.METRIC_REPORTER_CLASSES_CONFIG,
+                MetricsReporter.class);
+        reporters.add(new JmxReporter(JMX_PREFIX));
+        this.metrics = new Metrics(metricConfig, reporters, time);
+        long retryBackoffMs = config.getLong(ProducerConfig.RETRY_BACKOFF_MS_CONFIG);
+        if (keySerializer == null) {
+            this.keySerializer = config.getConfiguredInstance(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+                    Serializer.class);
+            this.keySerializer.configure(config.originals(), true);
+        } else {
+            config.ignore(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG);
+            this.keySerializer = keySerializer;
+        }
+        if (valueSerializer == null) {
+            this.valueSerializer = config.getConfiguredInstance(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+                    Serializer.class);
+            this.valueSerializer.configure(config.originals(), false);
+        } else {
+            config.ignore(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG);
+            this.valueSerializer = valueSerializer;
+        }
 
-            // load interceptors and make sure they get clientId
-            userProvidedConfigs.put(ProducerConfig.CLIENT_ID_CONFIG, clientId);
-            List<ProducerInterceptor<K, V>> interceptorList = (List) (new ProducerConfig(userProvidedConfigs)).getConfiguredInstances(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG,
-                    ProducerInterceptor.class);
-            this.interceptors = interceptorList.isEmpty() ? null : new ProducerInterceptors<>(interceptorList);
+        // load interceptors and make sure they get clientId
+        userProvidedConfigs.put(ProducerConfig.CLIENT_ID_CONFIG, clientId);
+        List<ProducerInterceptor<K, V>> interceptorList = (List) (new ProducerConfig(userProvidedConfigs)).getConfiguredInstances(ProducerConfig.INTERCEPTOR_CLASSES_CONFIG,
+                ProducerInterceptor.class);
+        this.interceptors = interceptorList.isEmpty() ? null : new ProducerInterceptors<>(interceptorList);
 
-            this.maxRequestSize = config.getInt(ProducerConfig.MAX_REQUEST_SIZE_CONFIG);
-            this.totalMemorySize = config.getLong(ProducerConfig.BUFFER_MEMORY_CONFIG);
-            this.compressionType = CompressionType.forName(config.getString(ProducerConfig.COMPRESSION_TYPE_CONFIG));
+        this.maxRequestSize = config.getInt(ProducerConfig.MAX_REQUEST_SIZE_CONFIG);
+        this.totalMemorySize = config.getLong(ProducerConfig.BUFFER_MEMORY_CONFIG);
+        this.compressionType = CompressionType.forName(config.getString(ProducerConfig.COMPRESSION_TYPE_CONFIG));
             /* check for user defined settings.
              * If the BLOCK_ON_BUFFER_FULL is set to true,we do not honor METADATA_FETCH_TIMEOUT_CONFIG.
              * This should be removed with release 0.9 when the deprecated configs are removed.
              */
-            if (userProvidedConfigs.containsKey(ProducerConfig.BLOCK_ON_BUFFER_FULL_CONFIG)) {
-                log.warn(ProducerConfig.BLOCK_ON_BUFFER_FULL_CONFIG + " config is deprecated and will be removed soon. " +
-                        "Please use " + ProducerConfig.MAX_BLOCK_MS_CONFIG);
-                boolean blockOnBufferFull = config.getBoolean(ProducerConfig.BLOCK_ON_BUFFER_FULL_CONFIG);
-                if (blockOnBufferFull) {
-                    this.maxBlockTimeMs = Long.MAX_VALUE;
-                } else if (userProvidedConfigs.containsKey(ProducerConfig.METADATA_FETCH_TIMEOUT_CONFIG)) {
-                    log.warn(ProducerConfig.METADATA_FETCH_TIMEOUT_CONFIG + " config is deprecated and will be removed soon. " +
-                            "Please use " + ProducerConfig.MAX_BLOCK_MS_CONFIG);
-                    this.maxBlockTimeMs = config.getLong(ProducerConfig.METADATA_FETCH_TIMEOUT_CONFIG);
-                } else {
-                    this.maxBlockTimeMs = config.getLong(ProducerConfig.MAX_BLOCK_MS_CONFIG);
-                }
+        if (userProvidedConfigs.containsKey(ProducerConfig.BLOCK_ON_BUFFER_FULL_CONFIG)) {
+            log.warn(ProducerConfig.BLOCK_ON_BUFFER_FULL_CONFIG + " config is deprecated and will be removed soon. " +
+                    "Please use " + ProducerConfig.MAX_BLOCK_MS_CONFIG);
+            boolean blockOnBufferFull = config.getBoolean(ProducerConfig.BLOCK_ON_BUFFER_FULL_CONFIG);
+            if (blockOnBufferFull) {
+                this.maxBlockTimeMs = Long.MAX_VALUE;
             } else if (userProvidedConfigs.containsKey(ProducerConfig.METADATA_FETCH_TIMEOUT_CONFIG)) {
                 log.warn(ProducerConfig.METADATA_FETCH_TIMEOUT_CONFIG + " config is deprecated and will be removed soon. " +
                         "Please use " + ProducerConfig.MAX_BLOCK_MS_CONFIG);
@@ -207,57 +201,64 @@ public class PubsubProducer<K, V> implements Producer<K, V> {
             } else {
                 this.maxBlockTimeMs = config.getLong(ProducerConfig.MAX_BLOCK_MS_CONFIG);
             }
+        } else if (userProvidedConfigs.containsKey(ProducerConfig.METADATA_FETCH_TIMEOUT_CONFIG)) {
+            log.warn(ProducerConfig.METADATA_FETCH_TIMEOUT_CONFIG + " config is deprecated and will be removed soon. " +
+                    "Please use " + ProducerConfig.MAX_BLOCK_MS_CONFIG);
+            this.maxBlockTimeMs = config.getLong(ProducerConfig.METADATA_FETCH_TIMEOUT_CONFIG);
+        } else {
+            this.maxBlockTimeMs = config.getLong(ProducerConfig.MAX_BLOCK_MS_CONFIG);
+        }
 
             /* check for user defined settings.
              * If the TIME_OUT config is set use that for request timeout.
              * This should be removed with release 0.9
              */
-            if (userProvidedConfigs.containsKey(ProducerConfig.TIMEOUT_CONFIG)) {
-                log.warn(ProducerConfig.TIMEOUT_CONFIG + " config is deprecated and will be removed soon. Please use " +
-                        ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG);
-                this.requestTimeoutMs = config.getInt(ProducerConfig.TIMEOUT_CONFIG);
-            } else {
-                this.requestTimeoutMs = config.getInt(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG);
-            }
-
-            this.accumulator = new PubsubAccumulator(config.getInt(ProducerConfig.BATCH_SIZE_CONFIG),
-                    this.totalMemorySize,
-                    this.compressionType,
-                    config.getLong(ProducerConfig.LINGER_MS_CONFIG),
-                    retryBackoffMs,
-                    metrics,
-                    time);
-
-            ManagedChannel channel = NettyChannelBuilder.forAddress("pubsub.googleapis.com", 443)
-                    .flowControlWindow(config.getInt(ProducerConfig.BUFFER_MEMORY_CONFIG))
-                    .executor(new ThreadPoolExecutor(1,
-                            config.getInt(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION),
-                            config.getLong(ProducerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG),
-                            TimeUnit.MILLISECONDS, new LinkedTransferQueue<Runnable>())).build();
-            this.sender = new PubsubSender(channel,
-                    this.accumulator,
-                    config.getInt(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION) == 1,
-                    config.getInt(ProducerConfig.MAX_REQUEST_SIZE_CONFIG),
-                    config.getInt(ProducerConfig.RETRIES_CONFIG),
-                    this.metrics,
-                    new SystemTime(),
-                    this.requestTimeoutMs);
-            String ioThreadName = "pubsub-producer-network-thread" + (clientId.length() > 0 ? " | " + clientId : "");
-            this.ioThread = new KafkaThread(ioThreadName, this.sender, true);
-            this.ioThread.start();
-
-            this.errors = this.metrics.sensor("errors");
-
-            config.logUnused();
-            AppInfoParser.registerAppInfo(JMX_PREFIX, clientId);
-            log.debug("Pubsub producer started");
-        } catch (Throwable t) {
-            // call close methods if internal objects are already constructed
-            // this is to prevent resource leak. see KAFKA-2121
-            close(0, TimeUnit.MILLISECONDS, true);
-            // now propagate the exception
-            throw new KafkaException("Failed to construct Pubsub producer", t);
+        if (userProvidedConfigs.containsKey(ProducerConfig.TIMEOUT_CONFIG)) {
+            log.warn(ProducerConfig.TIMEOUT_CONFIG + " config is deprecated and will be removed soon. Please use " +
+                    ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG);
+            this.requestTimeoutMs = config.getInt(ProducerConfig.TIMEOUT_CONFIG);
+        } else {
+            this.requestTimeoutMs = config.getInt(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG);
         }
+
+        this.accumulator = new PubsubAccumulator(config.getInt(ProducerConfig.BATCH_SIZE_CONFIG),
+                this.totalMemorySize,
+                this.compressionType,
+                config.getLong(ProducerConfig.LINGER_MS_CONFIG),
+                retryBackoffMs,
+                metrics,
+                time);
+
+        int sendBufferSize = config.getInt(ProducerConfig.SEND_BUFFER_CONFIG);
+        if (sendBufferSize == Selectable.USE_DEFAULT_BUFFER_SIZE)
+            sendBufferSize = SocketOptions.SO_SNDBUF;
+        int receiveBufferSize = config.getInt(ProducerConfig.SEND_BUFFER_CONFIG);
+        if (receiveBufferSize == Selectable.USE_DEFAULT_BUFFER_SIZE)
+            receiveBufferSize = SocketOptions.SO_RCVBUF;
+
+        ManagedChannel channel = NettyChannelBuilder.forAddress("pubsub.googleapis.com", 443)
+                .flowControlWindow(sendBufferSize + receiveBufferSize)
+                .executor(new ThreadPoolExecutor(1,
+                        config.getInt(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION),
+                        config.getLong(ProducerConfig.CONNECTIONS_MAX_IDLE_MS_CONFIG),
+                        TimeUnit.MILLISECONDS, new LinkedTransferQueue<Runnable>())).build();
+        this.sender = new PubsubSender(channel,
+                this.accumulator,
+                config.getInt(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION) == 1,
+                config.getInt(ProducerConfig.MAX_REQUEST_SIZE_CONFIG),
+                config.getInt(ProducerConfig.RETRIES_CONFIG),
+                this.metrics,
+                new SystemTime(),
+                this.requestTimeoutMs);
+        String ioThreadName = "pubsub-producer-network-thread" + (clientId.length() > 0 ? " | " + clientId : "");
+        this.ioThread = new KafkaThread(ioThreadName, this.sender, true);
+        this.ioThread.start();
+
+        this.errors = this.metrics.sensor("errors");
+
+        config.logUnused();
+        AppInfoParser.registerAppInfo(JMX_PREFIX, clientId);
+        log.debug("Pubsub producer started");
     }
 
     private static int parseAcks(String acksString) {

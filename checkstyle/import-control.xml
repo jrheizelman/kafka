@@ -34,6 +34,7 @@
   <allow pkg="javax.security" />
   <allow pkg="org.ietf.jgss" />
   <allow pkg="io.grpc" />
+  <allow pkg="java.net" />
 
   <!-- no one depends on the server -->
   <disallow pkg="kafka" />
