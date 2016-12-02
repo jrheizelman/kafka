@@ -238,178 +238,181 @@ public class PubsubAccumulatorTest {
         assertEquals("Topic should drain the second batch.", 1, batches.get(topic).size());
     }
 
-//    @Test
-//    public void testFlush() throws Exception {
-//        long lingerMs = Long.MAX_VALUE;
-//        final PubsubAccumulator accum = new PubsubAccumulator(4 * 1024, 64 * 1024, CompressionType.NONE, lingerMs, 100L, metrics, time);
-//        for (int i = 0; i < 100; i++)
-//            accum.append(new TopicPartition(topic, i % 3), 0L, key, value, null, maxBlockTimeMs);
-//        Set<String> result = accum.ready(time.milliseconds());
-//        assertEquals("No nodes should be ready.", 0, readyNodes.size());
-//
-//        accum.beginFlush();
-//        result = accum.ready(time.milliseconds());
-//
-//        // drain and deallocate all batches
-//        Map<Integer, List<PubsubBatch>> results = accum.drain(readyNodes, Integer.MAX_VALUE, time.milliseconds());
-//        for (List<PubsubBatch> batches: results.values())
-//            for (PubsubBatch batch: batches)
-//                accum.deallocate(batch);
-//
-//        // should be complete with no unsent records.
-//        accum.awaitFlushCompletion();
-//        assertFalse(accum.hasUnsent());
-//    }
-//
-//
-//    private void delayedInterrupt(final Thread thread, final long delayMs) {
-//        Thread t = new Thread() {
-//            public void run() {
-//                systemTime.sleep(delayMs);
-//                thread.interrupt();
-//            }
-//        };
-//        t.start();
-//    }
-//
-//    @Test
-//    public void testAwaitFlushComplete() throws Exception {
-//        PubsubAccumulator accum = new PubsubAccumulator(4 * 1024, 64 * 1024, CompressionType.NONE, Long.MAX_VALUE, 100L, metrics, time);
-//        accum.append(new TopicPartition(topic, 0), 0L, key, value, null, maxBlockTimeMs);
-//
-//        accum.beginFlush();
-//        assertTrue(accum.flushInProgress());
-//        delayedInterrupt(Thread.currentThread(), 1000L);
-//        try {
-//            accum.awaitFlushCompletion();
-//            fail("awaitFlushCompletion should throw InterruptException");
-//        } catch (InterruptedException e) {
-//            assertFalse("flushInProgress count should be decremented even if thread is interrupted", accum.flushInProgress());
-//        }
-//    }
-//
-//
-//    @Test
-//    public void testAbortIncompleteBatches() throws Exception {
-//        long lingerMs = Long.MAX_VALUE;
-//        final AtomicInteger numExceptionReceivedInCallback = new AtomicInteger(0);
-//        final PubsubAccumulator accum = new PubsubAccumulator(4 * 1024, 64 * 1024, CompressionType.NONE, lingerMs, 100L, metrics, time);
-//        class TestCallback implements Callback {
-//            @Override
-//            public void onCompletion(RecordMetadata metadata, Exception exception) {
-//                assertTrue(exception.getMessage().equals("Producer is closed forcefully."));
-//                numExceptionReceivedInCallback.incrementAndGet();
-//            }
-//        }
-//        for (int i = 0; i < 100; i++)
-//            accum.append(new TopicPartition(topic, i % 3), 0L, key, value, new TestCallback(), maxBlockTimeMs);
-//        Set<String> result = accum.ready(time.milliseconds());
-//        assertEquals("No nodes should be ready.", 0, readyNodes.size());
-//
-//        accum.abortIncompleteBatches();
-//        assertEquals(numExceptionReceivedInCallback.get(), 100);
-//        assertFalse(accum.hasUnsent());
-//
-//    }
-//
-//    @Test
-//    public void testExpiredBatches() throws InterruptedException {
-//        long retryBackoffMs = 100L;
-//        long lingerMs = 3000L;
-//        int requestTimeout = 60;
-//
-//        PubsubAccumulator accum = new PubsubAccumulator(1024, 10 * 1024, CompressionType.NONE, lingerMs, retryBackoffMs, metrics, time);
-//        int appends = 1024 / msgSize;
-//
-//        // Test batches not in retry
-//        for (int i = 0; i < appends; i++) {
-//            accum.append(topic, 0L, key, value, null, maxBlockTimeMs);
-//            assertEquals("No partitions should be ready.", 0, accum.ready(time.milliseconds()).size());
-//        }
-//        // Make the batches ready due to batch full
-//        accum.append(topic, 0L, key, value, null, 0);
-//        Set<Node> readyNodes = accum.ready(time.milliseconds());
-//        assertEquals("Our partition's leader should be ready", Collections.singleton(topic), readyNodes);
-//        // Advance the clock to expire the batch.
-//        time.sleep(requestTimeout + 1);
-//        accum.mutePartition(topic);
-//        List<PubsubBatch> expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
-//        assertEquals("The batch should not be expired when the partition is muted", 0, expiredBatches.size());
-//
-//        accum.unmutePartition(topic);
-//        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
-//        assertEquals("The batch should be expired", 1, expiredBatches.size());
-//        assertEquals("No partitions should be ready.", 0, accum.ready(time.milliseconds()).size());
-//
-//        // Advance the clock to make the next batch ready due to linger.ms
-//        time.sleep(lingerMs);
-//        assertEquals("Our partition's leader should be ready", Collections.singleton(topic), readyNodes);
-//        time.sleep(requestTimeout + 1);
-//
-//        accum.mutePartition(topic);
-//        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
-//        assertEquals("The batch should not be expired when metadata is still available and partition is muted", 0, expiredBatches.size());
-//
-//        accum.unmutePartition(topic);
-//        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
-//        assertEquals("The batch should be expired when the partition is not muted", 1, expiredBatches.size());
-//        assertEquals("No partitions should be ready.", 0, accum.ready(time.milliseconds()).size());
-//
-//        // Test batches in retry.
-//        // Create a retried batch
-//        accum.append(topic, 0L, key, value, null, 0);
-//        time.sleep(lingerMs);
-//        readyNodes = accum.ready(time.milliseconds());
-//        assertEquals("Our partition's leader should be ready", Collections.singleton(topic), readyNodes);
-//        Map<Integer, List<PubsubBatch>> drained = accum.drain(readyNodes, Integer.MAX_VALUE, time.milliseconds());
-//        assertEquals("There should be only one batch.", drained.get(topic).size(), 1);
-//        time.sleep(1000L);
-//        accum.reenqueue(drained.get(topic).get(0), time.milliseconds());
-//
-//        // test expiration.
-//        time.sleep(requestTimeout + retryBackoffMs);
-//        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
-//        assertEquals("The batch should not be expired.", 0, expiredBatches.size());
-//        time.sleep(1L);
-//
-//        accum.mutePartition(topic);
-//        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
-//        assertEquals("The batch should not be expired when the partition is muted", 0, expiredBatches.size());
-//
-//        accum.unmutePartition(topic);
-//        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
-//        assertEquals("The batch should be expired when the partition is not muted.", 1, expiredBatches.size());
-//    }
-//
-//    @Test
-//    public void testMutedPartitions() throws InterruptedException {
-//        long now = time.milliseconds();
-//        PubsubAccumulator accum = new PubsubAccumulator(1024, 10 * 1024, CompressionType.NONE, 10, 100L, metrics, time);
-//        int appends = 1024 / msgSize;
-//        for (int i = 0; i < appends; i++) {
-//            accum.append(topic, 0L, key, value, null, maxBlockTimeMs);
-//            assertEquals("No partitions should be ready.", 0, accum.ready(now).readyNodes.size());
-//        }
-//        time.sleep(2000);
-//
-//        // Test ready with muted partition
-//        accum.mutePartition(topic);
-//        Set<String> result = accum.ready(time.milliseconds());
-//        assertEquals("No node should be ready", 0, readyNodes.size());
-//
-//        // Test ready without muted partition
-//        accum.unmutePartition(topic);
-//        result = accum.ready(time.milliseconds());
-//        assertTrue("The batch should be ready", readyNodes.size() > 0);
-//
-//        // Test drain with muted partition
-//        accum.mutePartition(topic);
-//        Map<Integer, List<PubsubBatch>> drained = accum.drain(readyNodes, Integer.MAX_VALUE, time.milliseconds());
-//        assertEquals("No batch should have been drained", 0, drained.get(topic).size());
-//
-//        // Test drain without muted partition.
-//        accum.unmutePartition(topic);
-//        drained = accum.drain(readyNodes, Integer.MAX_VALUE, time.milliseconds());
-//        assertTrue("The batch should have been drained.", drained.get(topic).size() > 0);
-//    }
+    @Test
+    public void testFlush() throws Exception {
+        long lingerMs = Long.MAX_VALUE;
+        int batchSize = 4 * 1024;
+        final PubsubAccumulator accum = new PubsubAccumulator(batchSize, 64 * 1024, CompressionType.NONE, lingerMs, 100L, metrics, time);
+        int attempts = batchSize / msgSize;
+        for (int i = 0; i < attempts; i++)
+            accum.append(topic, 0L, key, value, null, maxBlockTimeMs); // Fill almost 1 complete batch
+        Set<String> readyTopics = accum.ready(time.milliseconds());
+        assertEquals("No topics should be ready.", 0, readyTopics.size());
+
+        accum.beginFlush();
+        readyTopics = accum.ready(time.milliseconds());
+
+        // drain and deallocate all batches
+        Map<String, List<PubsubBatch>> results = accum.drain(readyTopics, Integer.MAX_VALUE, time.milliseconds());
+        for (List<PubsubBatch> batches: results.values())
+            for (PubsubBatch batch: batches)
+                accum.deallocate(batch);
+
+        // should be complete with no unsent records.
+        accum.awaitFlushCompletion();
+        assertFalse(accum.hasUnsent());
+    }
+
+    private void delayedInterrupt(final Thread thread, final long delayMs) {
+        Thread t = new Thread() {
+            public void run() {
+                systemTime.sleep(delayMs);
+                thread.interrupt();
+            }
+        };
+        t.start();
+    }
+
+    @Test
+    public void testAwaitFlushComplete() throws Exception {
+        PubsubAccumulator accum = new PubsubAccumulator(4 * 1024, 64 * 1024, CompressionType.NONE, Long.MAX_VALUE, 100L, metrics, time);
+        accum.append(topic, 0L, key, value, null, maxBlockTimeMs);
+
+        accum.beginFlush();
+        assertTrue(accum.flushInProgress());
+        delayedInterrupt(Thread.currentThread(), 1000L);
+        try {
+            accum.awaitFlushCompletion();
+            fail("awaitFlushCompletion should throw InterruptException");
+        } catch (InterruptedException e) {
+            assertFalse("flushInProgress count should be decremented even if thread is interrupted", accum.flushInProgress());
+        }
+    }
+
+    @Test
+    public void testAbortIncompleteBatches() throws Exception {
+        long lingerMs = Long.MAX_VALUE;
+        int batchSize = 4 * 1024;
+        final AtomicInteger numExceptionReceivedInCallback = new AtomicInteger(0);
+        final PubsubAccumulator accum = new PubsubAccumulator(batchSize, 64 * 1024, CompressionType.NONE, lingerMs, 100L, metrics, time);
+        class TestCallback implements Callback {
+            @Override
+            public void onCompletion(RecordMetadata metadata, Exception exception) {
+                assertTrue(exception.getMessage().equals("Producer is closed forcefully."));
+                numExceptionReceivedInCallback.incrementAndGet();
+            }
+        }
+        int attempts = batchSize / msgSize;
+        for (int i = 0; i < attempts; i++)
+            accum.append(topic, 0L, key, value, new TestCallback(), maxBlockTimeMs);
+        Set<String> readyTopics = accum.ready(time.milliseconds());
+        assertEquals("No topics should be ready.", 0, readyTopics.size());
+
+        accum.abortIncompleteBatches();
+        assertEquals(numExceptionReceivedInCallback.get(), attempts);
+        assertFalse(accum.hasUnsent());
+
+    }
+
+    @Test
+    public void testExpiredBatches() throws InterruptedException {
+        long retryBackoffMs = 100L;
+        long lingerMs = 3000L;
+        int batchSize = 1024;
+        int requestTimeout = 60;
+
+        PubsubAccumulator accum = new PubsubAccumulator(batchSize, 10 * 1024, CompressionType.NONE, lingerMs, retryBackoffMs, metrics, time);
+        int appends = batchSize / msgSize;
+
+        // Test batches not in retry
+        for (int i = 0; i < appends; i++) {
+            accum.append(topic, 0L, key, value, null, maxBlockTimeMs);
+            assertEquals("No topics should be ready.", 0, accum.ready(time.milliseconds()).size());
+        }
+        // Make the batches ready due to batch full
+        accum.append(topic, 0L, key, value, null, 0);
+        Set<String> readyTopics = accum.ready(time.milliseconds());
+        assertEquals("Topic should be ready", Collections.singleton(topic), readyTopics);
+        // Advance the clock to expire the batch.
+        time.sleep(requestTimeout + 1);
+        accum.muteTopic(topic);
+        List<PubsubBatch> expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
+        assertEquals("The batch should not be expired when the topic is muted", 0, expiredBatches.size());
+
+        accum.unmuteTopic(topic);
+        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
+        assertEquals("The batch should be expired", 1, expiredBatches.size());
+        assertEquals("No topics should be ready.", 0, accum.ready(time.milliseconds()).size());
+
+        // Advance the clock to make the next batch ready due to linger.ms
+        time.sleep(lingerMs);
+        assertEquals("Topic should be ready", Collections.singleton(topic), readyTopics);
+        time.sleep(requestTimeout + 1);
+
+        accum.muteTopic(topic);
+        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
+        assertEquals("The batch should not be expired when topic is muted", 0, expiredBatches.size());
+
+        accum.unmuteTopic(topic);
+        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
+        assertEquals("The batch should be expired when the topic is not muted", 1, expiredBatches.size());
+        assertEquals("No topics should be ready.", 0, accum.ready(time.milliseconds()).size());
+
+        // Test batches in retry.
+        // Create a retried batch
+        accum.append(topic, 0L, key, value, null, 0);
+        time.sleep(lingerMs);
+        readyTopics = accum.ready(time.milliseconds());
+        assertEquals("Our partition's leader should be ready", Collections.singleton(topic), readyTopics);
+        Map<String, List<PubsubBatch>> drained = accum.drain(readyTopics, Integer.MAX_VALUE, time.milliseconds());
+        assertEquals("There should be only one batch.", drained.get(topic).size(), 1);
+        time.sleep(1000L);
+        accum.reenqueue(drained.get(topic).get(0), time.milliseconds());
+
+        // test expiration.
+        time.sleep(requestTimeout + retryBackoffMs);
+        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
+        assertEquals("The batch should not be expired.", 0, expiredBatches.size());
+        time.sleep(1L);
+
+        accum.muteTopic(topic);
+        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
+        assertEquals("The batch should not be expired when the topic is muted", 0, expiredBatches.size());
+
+        accum.unmuteTopic(topic);
+        expiredBatches = accum.abortExpiredBatches(requestTimeout, time.milliseconds());
+        assertEquals("The batch should be expired when the topic is not muted.", 1, expiredBatches.size());
+    }
+
+    @Test
+    public void testMutedPartitions() throws InterruptedException {
+        long now = time.milliseconds();
+        PubsubAccumulator accum = new PubsubAccumulator(1024, 10 * 1024, CompressionType.NONE, 10, 100L, metrics, time);
+        int appends = 1024 / msgSize;
+        for (int i = 0; i < appends; i++) {
+            accum.append(topic, 0L, key, value, null, maxBlockTimeMs);
+            assertEquals("No partitions should be ready.", 0, accum.ready(now).size());
+        }
+        time.sleep(2000);
+
+        // Test ready with muted partition
+        accum.muteTopic(topic);
+        Set<String> readyTopics = accum.ready(time.milliseconds());
+        assertEquals("No node should be ready", 0, readyTopics.size());
+
+        // Test ready without muted partition
+        accum.unmuteTopic(topic);
+        readyTopics = accum.ready(time.milliseconds());
+        assertTrue("The batch should be ready", readyTopics.size() > 0);
+
+        // Test drain with muted partition
+        accum.muteTopic(topic);
+        Map<String, List<PubsubBatch>> drained = accum.drain(readyTopics, Integer.MAX_VALUE, time.milliseconds());
+        assertEquals("No batch should have been drained", 0, drained.get(topic).size());
+
+        // Test drain without muted partition.
+        accum.unmuteTopic(topic);
+        drained = accum.drain(readyTopics, Integer.MAX_VALUE, time.milliseconds());
+        assertTrue("The batch should have been drained.", drained.get(topic).size() > 0);
+    }
 }
