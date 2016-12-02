@@ -16,11 +16,15 @@ import com.google.pubsub.v1.PublishResponse;
 import io.grpc.inprocess.InProcessChannelBuilder;
 import io.grpc.inprocess.InProcessServerBuilder;
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.Cluster;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.metrics.MetricConfig;
 import org.apache.kafka.common.metrics.Metrics;
+import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.record.CompressionType;
 import org.apache.kafka.common.utils.MockTime;
+import org.apache.kafka.test.TestUtils;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -33,6 +37,9 @@ import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
+import static com.sun.org.apache.xalan.internal.xsltc.compiler.util.Type.Node;
+import static org.bouncycastle.crypto.tls.ConnectionEnd.client;
+import static org.bouncycastle.crypto.tls.ConnectionEnd.server;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -80,11 +87,11 @@ public class PubsubSenderTest {
         long offset = 32;
         Future<RecordMetadata> future = accumulator.append(topic, 0L, "key".getBytes(), "value".getBytes(), null, MAX_BLOCK_TIMEOUT).future;
         sender.run(time.milliseconds()); // Sends produce request
-        assertTrue("Server did not receive request.", server.listen(1, 1000));
+        assertTrue("Server should receive request.", server.listen(1, 1000));
         server.respond(PublishResponse.newBuilder().addMessageIds(Long.toString(offset)).build());
         assertEquals("All requests completed.", 0, (long) server.inFlightCount());
         assertNotNull("Request should be completed", future.get());
-        assertFalse("The topic should not be muted", accumulator.isMutedTopic(topic));
+        waitForUnmute(topic, 1000);
     }
 
     @Test
@@ -95,13 +102,13 @@ public class PubsubSenderTest {
         // do a successful retry
         Future<RecordMetadata> future = accumulator.append(topic, 0L, "key".getBytes(), "value".getBytes(), null, MAX_BLOCK_TIMEOUT).future;
         sender.run(time.milliseconds()); // send produce request
-        assertTrue("Server did not receive request.", server.listen(1, 1000));
+        assertTrue("Server should receive request.", server.listen(1, 1000));
         server.disconnect();
         assertEquals("All requests completed.", 0, server.inFlightCount());
         completedWithError(future, Errors.NETWORK_EXCEPTION);
         waitForUnmute(topic, 1000);
         sender.run(time.milliseconds()); // send second produce request
-        assertTrue("Server did not receive request.", server.listen(1, 1000));
+        assertTrue("Server should receive request..", server.listen(1, 1000));
         long offset = 32;
         server.respond(PublishResponse.newBuilder().addMessageIds(Long.toString(offset)).build());
         assertEquals("All requests completed.", 0, (long) server.inFlightCount());
@@ -113,97 +120,34 @@ public class PubsubSenderTest {
         future = accumulator.append(topic, 0L, "key".getBytes(), "value".getBytes(), null, MAX_BLOCK_TIMEOUT).future;
         for (int i = 0; i < maxRetries + 1; i++) {
             sender.run(time.milliseconds()); // send produce request
-            assertTrue("Server did not receive request.", server.listen(1, 1000));
+            assertTrue("Server should receive request.", server.listen(1, 1000));
             server.disconnect();
             completedWithError(future, Errors.NETWORK_EXCEPTION);
             waitForUnmute(topic, 1000);
         }
         sender.run(time.milliseconds());
-        assertEquals("No retry received.", 0, server.inFlightCount());
+        assertEquals("Retry request should be received.", 0, server.inFlightCount());
         waitForUnmute(topic, 1000);
     }
 
-//    @Test
-//    public void testSendInOrder() throws Exception {
-//        int maxRetries = 1;
-//        Metrics m = new Metrics();
-//        try {
-//            Sender sender = new Sender(client,
-//                    metadata,
-//                    this.accumulator,
-//                    true,
-//                    MAX_REQUEST_SIZE,
-//                    ACKS_ALL,
-//                    maxRetries,
-//                    m,
-//                    time,
-//                    REQUEST_TIMEOUT);
-//
-//            // Create a two broker cluster, with partition 0 on broker 0 and partition 1 on broker 1
-//            Cluster cluster1 = TestUtils.clusterWith(2, "test", 2);
-//            metadata.update(cluster1, time.milliseconds());
-//
-//            // Send the first message.
-//            TopicPartition tp2 = new TopicPartition("test", 1);
-//            accumulator.append(tp2, 0L, "key1".getBytes(), "value1".getBytes(), null, MAX_BLOCK_TIMEOUT);
-//            sender.run(time.milliseconds()); // connect
-//            sender.run(time.milliseconds()); // send produce request
-//            String id = client.requests().peek().destination();
-//            assertEquals(ApiKeys.PRODUCE.id, client.requests().peek().header().apiKey());
-//            Node node = new Node(Integer.valueOf(id), "localhost", 0);
-//            assertEquals(1, client.inFlightRequestCount());
-//            assertTrue("Client ready status should be true", client.isReady(node, 0L));
-//
-//            time.sleep(900);
-//            // Now send another message to tp2
-//            accumulator.append(tp2, 0L, "key2".getBytes(), "value2".getBytes(), null, MAX_BLOCK_TIMEOUT);
-//
-//            // Update metadata before sender receives response from broker 0. Now partition 2 moves to broker 0
-//            Cluster cluster2 = TestUtils.singletonCluster("test", 2);
-//            metadata.update(cluster2, time.milliseconds());
-//            // Sender should not send the second message to node 0.
-//            sender.run(time.milliseconds());
-//            assertEquals(1, client.inFlightRequestCount());
-//        } finally {
-//            m.close();
-//        }
-//    }
-//
-//    /**
-//     * Tests that topics are added to the metadata list when messages are available to send
-//     * and expired if not used during a metadata refresh interval.
-//     */
-//    @Test
-//    public void testMetadataTopicExpiry() throws Exception {
-//        long offset = 0;
-//        metadata.update(Cluster.empty(), time.milliseconds());
-//
-//        Future<RecordMetadata> future = accumulator.append(tp, time.milliseconds(), "key".getBytes(), "value".getBytes(), null, MAX_BLOCK_TIMEOUT).future;
-//        sender.run(time.milliseconds());
-//        assertTrue("Topic not added to metadata", metadata.containsTopic(tp.topic()));
-//        metadata.update(cluster, time.milliseconds());
-//        sender.run(time.milliseconds());  // send produce request
-//        client.respond(produceResponse(tp, offset++, Errors.NONE.code(), 0));
-//        sender.run(time.milliseconds());
-//        assertEquals("Request completed.", 0, client.inFlightRequestCount());
-//        sender.run(time.milliseconds());
-//        assertTrue("Request should be completed", future.isDone());
-//
-//        assertTrue("Topic not retained in metadata list", metadata.containsTopic(tp.topic()));
-//        time.sleep(Metadata.TOPIC_EXPIRY_MS);
-//        metadata.update(Cluster.empty(), time.milliseconds());
-//        assertFalse("Unused topic has not been expired", metadata.containsTopic(tp.topic()));
-//        future = accumulator.append(tp, time.milliseconds(), "key".getBytes(), "value".getBytes(), null, MAX_BLOCK_TIMEOUT).future;
-//        sender.run(time.milliseconds());
-//        assertTrue("Topic not added to metadata", metadata.containsTopic(tp.topic()));
-//        metadata.update(cluster, time.milliseconds());
-//        sender.run(time.milliseconds());  // send produce request
-//        client.respond(produceResponse(tp, offset++, Errors.NONE.code(), 0));
-//        sender.run(time.milliseconds());
-//        assertEquals("Request completed.", 0, client.inFlightRequestCount());
-//        sender.run(time.milliseconds());
-//        assertTrue("Request should be completed", future.isDone());
-//    }
+    @Test
+    public void testSendInOrder() throws Exception {
+        PubsubSender sender = newSender("testSendInOrder", MAX_RETRIES);
+        MockPubsubServer server = newServer("testSendInOrder");
+
+        // Send the first message.
+        accumulator.append(topic, 0L, "key1".getBytes(), "value1".getBytes(), null, MAX_BLOCK_TIMEOUT);
+        sender.run(time.milliseconds()); // send produce request
+        assertTrue("Server should receive request.", server.listen(1, 1000));
+
+        time.sleep(900);
+        // Now send another message
+        accumulator.append(topic, 0L, "key2".getBytes(), "value2".getBytes(), null, MAX_BLOCK_TIMEOUT);
+
+        // Sender should not send second message before first is returned
+        sender.run(time.milliseconds());
+        assertTrue("Server expects only one request.", server.listen(1, 1000));
+    }
 
     private void completedWithError(Future<RecordMetadata> future, Errors error) throws Exception {
         try {
