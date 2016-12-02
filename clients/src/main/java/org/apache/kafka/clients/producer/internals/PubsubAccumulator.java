@@ -293,7 +293,6 @@ public final class PubsubAccumulator {
      */
     public Set<String> ready(long nowMs) {
         Set<String> readyTopics = new HashSet<>();
-        long nextReadyCheckDelayMs = Long.MAX_VALUE;
 
         boolean exhausted = this.free.queued() > 0;
         for (Map.Entry<String, Deque<PubsubBatch>> entry : this.batches.entrySet()) {
@@ -313,11 +312,6 @@ public final class PubsubAccumulator {
                         boolean sendable = full || expired || exhausted || closed || flushInProgress();
                         if (sendable && !backingOff) {
                             readyTopics.add(topic);
-                        } else {
-                            // Note that this results in a conservative estimate since an un-sendable partition may have
-                            // a leader that will later be found to have sendable data. However, this is good enough
-                            // since we'll just wake up and then sleep again for the remaining time.
-                            nextReadyCheckDelayMs = Math.min(timeLeftMs, nextReadyCheckDelayMs);
                         }
                     }
                 }
