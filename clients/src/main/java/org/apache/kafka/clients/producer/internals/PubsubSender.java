@@ -193,7 +193,7 @@ public class PubsubSender implements Runnable {
         // breaking from the sender loop. Otherwise, we may miss some callbacks when shutting down.
         this.accumulator.close();
         this.running = false;
-        this.wakeup();
+        this.executor.shutdown();
     }
 
     /**
@@ -266,13 +266,6 @@ public class PubsubSender implements Runnable {
             executor.submit(new ProduceRequestThread(sendTime, timeout, batch, request.build()));
             log.trace("Sent produce request to topic {}", batch.topic);
         }
-    }
-
-    /**
-     *  Wake up thread
-     */
-    public void wakeup() {
-        // TODO(jrheizelman): implement wakeup
     }
 
     private class ProduceRequestThread implements Runnable {

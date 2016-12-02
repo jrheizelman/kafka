@@ -391,10 +391,6 @@ public class PubsubProducer<K, V> implements Producer<K, V> {
                     this.interceptors == null ? callback : new InterceptorCallback<>(callback, this.interceptors, tp);
             PubsubAccumulator.RecordAppendResult result = accumulator.append(tp.topic(), timestamp, serializedKey,
                     serializedValue, interceptCallback, maxBlockTimeMs);
-            if (result.batchIsFull || result.newBatchCreated) {
-                log.trace("Waking up the sender since topic {} is either full or getting a new batch", record.topic());
-                this.sender.wakeup();
-            }
             return result.future;
             // handling exceptions and record the errors;
             // for API exceptions return them in the future,
@@ -479,7 +475,6 @@ public class PubsubProducer<K, V> implements Producer<K, V> {
     public void flush() {
         log.trace("Flushing accumulated records in producer.");
         this.accumulator.beginFlush();
-        this.sender.wakeup();
         try {
             this.accumulator.awaitFlushCompletion();
         } catch (InterruptedException e) {
