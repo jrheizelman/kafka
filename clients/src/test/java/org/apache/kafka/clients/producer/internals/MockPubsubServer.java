@@ -31,13 +31,18 @@ public class MockPubsubServer extends PublisherGrpc.PublisherImplBase {
         responseList.add(responseObserver);
     }
 
-    public int inFlight() {
+    public int inFlightCount() {
         return responseList.size();
     }
 
     public void respond(PublishResponse response) {
         StreamObserver<PublishResponse> stream = responseList.poll();
         stream.onNext(response);
+        stream.onCompleted();
+    }
+
+    public void disconnect() {
+        StreamObserver<PublishResponse> stream = responseList.poll();
         stream.onCompleted();
     }
 

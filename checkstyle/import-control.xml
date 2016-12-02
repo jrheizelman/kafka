@@ -111,6 +111,7 @@
     <allow pkg="org.apache.kafka.clients" exact-match="true"/>
     <allow pkg="org.apache.kafka.test" />
     <allow pkg="com.google.pubsub.v1" />
+    <allow pkg="com.google.common.util.concurrent" />
     <allow pkg="com.google.protobuf" />
 
     <subpackage name="consumer">

@@ -12,12 +12,15 @@
  */
 package org.apache.kafka.clients.producer.internals;
 
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.protobuf.ByteString;
 import com.google.pubsub.v1.PublishRequest;
 import com.google.pubsub.v1.PublishResponse;
 import com.google.pubsub.v1.PublisherGrpc;
 import com.google.pubsub.v1.PubsubMessage;
 import io.grpc.ManagedChannel;
+import io.grpc.Status;
+import io.grpc.StatusRuntimeException;
 import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.errors.RetriableException;
 import org.apache.kafka.common.errors.TopicAuthorizationException;
@@ -209,7 +212,7 @@ public class PubsubSender implements Runnable {
                     batch.topic,
                     this.retries - batch.attempts - 1,
                     error);
-            this.accumulator.reenqueue(batch, System.currentTimeMillis());
+            this.accumulator.reenqueue(batch, time.milliseconds());
             this.sensors.recordRetries(batch.topic, batch.recordCount);
         } else {
             RuntimeException exception;
@@ -247,27 +250,12 @@ public class PubsubSender implements Runnable {
     /**
      * Create a produce request from the given record batches
      */
-    private void sendProduceRequest(final long sendTime, final long timeout, List<PubsubBatch> batches) {
-        for (final PubsubBatch batch : batches) {
-            final PublishRequest.Builder request = PublishRequest.newBuilder().setTopic(batch.topic);
+    private void sendProduceRequest(long sendTime, long timeout, List<PubsubBatch> batches) {
+        for (PubsubBatch batch : batches) {
+            PublishRequest.Builder request = PublishRequest.newBuilder().setTopic(batch.topic);
             request.addMessages(PubsubMessage.newBuilder()
                     .setData(ByteString.copyFrom(batch.records.buffer())));
-            executor.submit(new Runnable() {
-                public void run() {
-                    long receivedTime = System.currentTimeMillis();
-                    try {
-                        PublishResponse response = stub.publish(request.build()).get(timeout, TimeUnit.MILLISECONDS);
-                        log.trace("Receved produce response from topic {}", batch.topic);
-                        String id = response.getMessageIds(0);
-                        long offset = Long.valueOf(id);
-                        completeBatch(batch, Errors.NONE, offset, receivedTime);
-                    } catch (ExecutionException | InterruptedException | TimeoutException e) {
-//                        TODO(jrheizelman): Complete batch call
-//                        completeBatch(batch, Errors.NETWORK_EXCEPTION, -1L, Record.NO_TIMESTAMP, now);
-                    }
-                    sensors.recordLatency(batch.topic, receivedTime - sendTime);
-                }
-            });
+            executor.submit(new ProduceRequestThread(sendTime, timeout, batch, request.build()));
             log.trace("Sent produce request to topic {}", batch.topic);
         }
     }
@@ -277,6 +265,87 @@ public class PubsubSender implements Runnable {
      */
     public void wakeup() {
         // TODO(jrheizelman): implement wakeup
+    }
+
+    private class ProduceRequestThread implements Runnable {
+        private PublishRequest request;
+        private PubsubBatch batch;
+        private long timeout;
+        private long sendTime;
+
+        public ProduceRequestThread(long sendTime, long timeout, PubsubBatch batch, PublishRequest request) {
+            this.timeout = timeout;
+            this.sendTime = sendTime;
+            this.request = request;
+            this.batch = batch;
+        }
+
+        @Override
+        public void run() {
+            long receivedTime = time.milliseconds();
+            ListenableFuture<PublishResponse> future = stub.publish(request);
+            while (true) {
+                try {
+                    PublishResponse response = future.get(timeout, TimeUnit.MILLISECONDS);
+                    log.trace("Receved produce response from topic {}", batch.topic);
+                    String id = response.getMessageIds(0);
+                    long offset = Long.valueOf(id);
+                    completeBatch(batch, Errors.NONE, offset, receivedTime);
+                    return;
+                } catch (InterruptedException e) {
+                    log.warn("Accessing publish future was interrupted, retrying");
+                } catch (TimeoutException e) {
+                    completeBatch(batch, Errors.REQUEST_TIMED_OUT, -1L, receivedTime);
+                    return;
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof StatusRuntimeException) {
+                        Status.Code code = ((StatusRuntimeException) cause).getStatus().getCode();
+                        switch (code) {
+                            case ABORTED:
+                            case CANCELLED:
+                            case INTERNAL:
+                                completeBatch(batch, Errors.NETWORK_EXCEPTION, -1L, receivedTime);
+                                break;
+                            case DATA_LOSS:
+                                completeBatch(batch, Errors.CORRUPT_MESSAGE, -1L, receivedTime);
+                                break;
+                            case DEADLINE_EXCEEDED:
+                                completeBatch(batch, Errors.REQUEST_TIMED_OUT, -1L, receivedTime);
+                                break;
+                            case ALREADY_EXISTS:
+                            case OUT_OF_RANGE:
+                            case INVALID_ARGUMENT:
+                                completeBatch(batch, Errors.INVALID_REQUEST, -1L, receivedTime);
+                                break;
+                            case NOT_FOUND:
+                                completeBatch(batch, Errors.INVALID_TOPIC_EXCEPTION, -1L, receivedTime);
+                                break;
+                            case RESOURCE_EXHAUSTED:
+                                completeBatch(batch, Errors.RECORD_LIST_TOO_LARGE, -1L, receivedTime);
+                                break;
+                            case PERMISSION_DENIED:
+                            case UNAUTHENTICATED:
+                                completeBatch(batch, Errors.TOPIC_AUTHORIZATION_FAILED, -1L, receivedTime);
+                                break;
+                            case FAILED_PRECONDITION:
+                            case UNAVAILABLE:
+                                completeBatch(batch, Errors.BROKER_NOT_AVAILABLE, -1L, receivedTime);
+                                break;
+                            case UNIMPLEMENTED:
+                                completeBatch(batch, Errors.UNSUPPORTED_FOR_MESSAGE_FORMAT, -1L, receivedTime);
+                                break;
+                            default:
+                                completeBatch(batch, Errors.UNKNOWN, -1L, receivedTime);
+                                break;
+                        }
+                    } else {
+                        completeBatch(batch, Errors.UNKNOWN, -1L, receivedTime);
+                    }
+                }
+                sensors.recordLatency(batch.topic, receivedTime - sendTime);
+            }
+        }
     }
 
     private class PubsubSenderMetrics {
@@ -449,10 +518,5 @@ public class PubsubSender implements Runnable {
                     nodeRequestTime.record(latency, now);
             }
         }
-
-        public void recordThrottleTime(long throttleTimeMs) {
-            this.produceThrottleTimeSensor.record(throttleTimeMs, time.milliseconds());
-        }
-
     }
 }
