@@ -23,7 +23,9 @@ import org.apache.kafka.common.record.CompressionType;
 import org.apache.kafka.common.utils.MockTime;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.Timeout;
 
 import java.io.IOException;
 import java.util.LinkedHashMap;
@@ -32,6 +34,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -53,8 +56,8 @@ public class PubsubSenderTest {
     private Metrics metrics = null;
     private PubsubAccumulator accumulator = null;
 
-//    @Rule
-//    public Timeout globalTimeout = Timeout.seconds(15);
+    @Rule
+    public Timeout globalTimeout = Timeout.seconds(15);
 
     @Before
     public void setup() {
@@ -74,72 +77,50 @@ public class PubsubSenderTest {
     public void testSimple() throws Exception {
         MockPubsubServer server = newServer("testSimple");
         PubsubSender sender = newSender("testSimple", MAX_RETRIES);
-        long offset = 0;
+        long offset = 32;
         Future<RecordMetadata> future = accumulator.append(topic, 0L, "key".getBytes(), "value".getBytes(), null, MAX_BLOCK_TIMEOUT).future;
         sender.run(time.milliseconds()); // Sends produce request
-        boolean found = false;
-        for (int i = 0; i < 100; i++) {
-            if (server.listen(1)) {
-                found = true;
-                break;
-            }
-            Thread.sleep(50);
-        }
-        if (!found) {
-            fail("Server never received message");
-        }
-        server.respond(PublishResponse.newBuilder().addMessageIds("0").build());
-        assertEquals("All requests completed.", offset, (long) server.inFlightCount());
+        assertTrue("Server did not receive request.", server.listen(1, 1000));
+        server.respond(PublishResponse.newBuilder().addMessageIds(Long.toString(offset)).build());
+        assertEquals("All requests completed.", 0, (long) server.inFlightCount());
         assertNotNull("Request should be completed", future.get());
-        assertEquals(offset, future.get().offset());
+        assertFalse("The topic should not be muted", accumulator.isMutedTopic(topic));
     }
 
     @Test
     public void testRetries() throws Exception {
+        int maxRetries = 1;
         MockPubsubServer server = newServer("testRetries");
-        PubsubSender sender = newSender("testRetries", 1);
+        PubsubSender sender = newSender("testRetries", maxRetries);
         // do a successful retry
         Future<RecordMetadata> future = accumulator.append(topic, 0L, "key".getBytes(), "value".getBytes(), null, MAX_BLOCK_TIMEOUT).future;
         sender.run(time.milliseconds()); // send produce request
-        boolean found = false;
-        for (int i = 0; i < 100; i++) {
-            if (server.listen(1)) {
-                found = true;
-                break;
-            }
-            Thread.sleep(50);
-        }
-        if (!found) {
-            fail("Server never received message");
-        }
+        assertTrue("Server did not receive request.", server.listen(1, 1000));
         server.disconnect();
         assertEquals("All requests completed.", 0, server.inFlightCount());
         completedWithError(future, Errors.NETWORK_EXCEPTION);
+        waitForUnmute(topic, 1000);
         sender.run(time.milliseconds()); // send second produce request
-        found = false;
-        for (int i = 0; i < 100; i++) {
-            if (server.listen(1)) {
-                found = true;
-                break;
-            }
-            Thread.sleep(50);
-        }
-        if (!found) {
-            fail("Server never received message");
-        }
-        long offset = 0;
+        assertTrue("Server did not receive request.", server.listen(1, 1000));
+        long offset = 32;
         server.respond(PublishResponse.newBuilder().addMessageIds(Long.toString(offset)).build());
-        Thread.sleep(50);
-        assertTrue("Request should have retried and completed", future.isDone());
+        assertEquals("All requests completed.", 0, (long) server.inFlightCount());
+        eventualReturn(future, 1000);
         assertEquals(offset, future.get().offset());
+        waitForUnmute(topic, 1000);
 
-//        // do an unsuccessful retry
-//        future = accumulator.append(topic, 0L, "key".getBytes(), "value".getBytes(), null, MAX_BLOCK_TIMEOUT).future;
-//        sender.run(time.milliseconds()); // send produce request
-//        for (int i = 0; i < maxRetries + 1; i++) {
-//            server.disconnect();
-//            Thread.sleep(50);
-//        }
+        // do an unsuccessful retry
+        future = accumulator.append(topic, 0L, "key".getBytes(), "value".getBytes(), null, MAX_BLOCK_TIMEOUT).future;
+        for (int i = 0; i < maxRetries + 1; i++) {
+            sender.run(time.milliseconds()); // send produce request
+            assertTrue("Server did not receive request.", server.listen(1, 1000));
+            server.disconnect();
+            completedWithError(future, Errors.NETWORK_EXCEPTION);
+            waitForUnmute(topic, 1000);
+        }
+        sender.run(time.milliseconds());
+        assertEquals("No retry received.", 0, server.inFlightCount());
+        waitForUnmute(topic, 1000);
     }
 
 //    @Test
@@ -231,6 +212,36 @@ public class PubsubSenderTest {
         } catch (ExecutionException e) {
             assertEquals(error.exception().getClass(), e.getCause().getClass());
         }
+    }
+
+    private void eventualReturn(Future<RecordMetadata> future, long waitMillis) {
+        for(int i = 0; i < waitMillis / 50; i++) {
+            try {
+                if (future.get() != null) {
+                    return;
+                } else {
+                    break;
+                }
+            } catch (ExecutionException | InterruptedException e) { } // Ignore and wait a turn
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                i--; // Not a big deal to be interrupted, just go another time through the loop
+            }
+        }
+        fail("Should have received a non-null result from future without exception");
+    }
+
+    private void waitForUnmute(String topic, long waitMillis) {
+        for(int i = 0; i < waitMillis / 50; i++) {
+            if (!accumulator.isMutedTopic(topic)) {
+                return;
+            }
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) { }
+        }
+        fail(topic + " was never unmuted.");
     }
 
     private PubsubSender newSender(String channelName, int retries) {

@@ -53,6 +53,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class PubsubAccumulator {
     private static final Logger log = LoggerFactory.getLogger(RecordAccumulator.class);
 
+    private int mutedcalls = 0;
     private volatile boolean closed;
     private final AtomicInteger flushesInProgress;
     private final AtomicInteger appendsInProgress;
@@ -483,11 +484,17 @@ public final class PubsubAccumulator {
     }
 
     public void muteTopic(String topic) {
+        mutedcalls++;
         muted.add(topic);
     }
 
     public void unmuteTopic(String topic) {
+        mutedcalls++;
         muted.remove(topic);
+    }
+
+    public boolean isMutedTopic(String topic) {
+        return muted.contains(topic);
     }
 
     /**

@@ -161,7 +161,13 @@ public class PubsubSender implements Runnable {
             // Mute all the partitions drained
             for (List<PubsubBatch> batchList : batches.values()) {
                 for (PubsubBatch batch : batchList)
-                    this.accumulator.muteTopic(batch.topic);
+                    synchronized (accumulator) {
+                        if (accumulator.isMutedTopic(batch.topic)) {
+                            log.info("Another thread got same ordered topic before lock, removing.", batch.topic);
+                        } else {
+                            this.accumulator.muteTopic(batch.topic);
+                        }
+                    }
             }
         }
 
@@ -212,6 +218,7 @@ public class PubsubSender implements Runnable {
                     batch.topic,
                     this.retries - batch.attempts - 1,
                     error);
+            batch.done(baseOffset, timestamp, error.exception());
             this.accumulator.reenqueue(batch, time.milliseconds());
             this.sensors.recordRetries(batch.topic, batch.recordCount);
         } else {
@@ -339,9 +346,10 @@ public class PubsubSender implements Runnable {
                                 completeBatch(batch, Errors.UNKNOWN, -1L, receivedTime);
                                 break;
                         }
-                    } else {
+                    } else { // Status is not StatusRuntimeException
                         completeBatch(batch, Errors.UNKNOWN, -1L, receivedTime);
                     }
+                    return;
                 }
                 sensors.recordLatency(batch.topic, receivedTime - sendTime);
             }

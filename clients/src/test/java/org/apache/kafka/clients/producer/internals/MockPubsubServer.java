@@ -19,6 +19,9 @@ import io.grpc.stub.StreamObserver;
 import java.util.LinkedList;
 import java.util.Queue;
 
+import static org.bouncycastle.asn1.x500.style.RFC4519Style.l;
+import static org.bouncycastle.crypto.tls.CipherType.stream;
+
 public class MockPubsubServer extends PublisherGrpc.PublisherImplBase {
     private Queue<StreamObserver<PublishResponse>> responseList;
 
@@ -42,13 +45,25 @@ public class MockPubsubServer extends PublisherGrpc.PublisherImplBase {
     }
 
     public void disconnect() {
+        for (int i = 0; i < 100; i++) {
+            if (responseList.isEmpty()) {
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException e) { } // not an issue, ignore
+            }
+        }
         StreamObserver<PublishResponse> stream = responseList.poll();
         stream.onCompleted();
     }
 
-    public boolean listen(int messagesExpected) {
-        if (responseList.size() == messagesExpected) {
-            return true;
+    public boolean listen(int messagesExpected, long waitInMillis) {
+        for (int i = 0; i < waitInMillis / 50; i++) {
+            if (responseList.size() == messagesExpected) {
+                return true;
+            }
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) { }
         }
         return false;
     }
