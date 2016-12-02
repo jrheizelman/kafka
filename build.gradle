@@ -589,6 +589,8 @@ project(':clients') {
     compile libs.lz4
     compile libs.snappy
     compile libs.slf4jApi
+    compile "io.grpc:grpc-stub:1.0.1"
+    compile group: 'com.google.cloud', name: 'google-cloud-pubsub', version: '0.4.0'
 
     testCompile libs.bcpkix
     testCompile libs.junit

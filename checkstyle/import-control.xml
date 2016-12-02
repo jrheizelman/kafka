@@ -33,6 +33,8 @@
   <allow pkg="javax.net.ssl" />
   <allow pkg="javax.security" />
   <allow pkg="org.ietf.jgss" />
+  <allow pkg="io.grpc" />
+  <allow pkg="java.net" />
 
   <!-- no one depends on the server -->
   <disallow pkg="kafka" />
@@ -108,6 +110,9 @@
     <allow pkg="org.apache.kafka.common" />
     <allow pkg="org.apache.kafka.clients" exact-match="true"/>
     <allow pkg="org.apache.kafka.test" />
+    <allow pkg="com.google.pubsub.v1" />
+    <allow pkg="com.google.common.util.concurrent" />
+    <allow pkg="com.google.protobuf" />
 
     <subpackage name="consumer">
       <allow pkg="org.apache.kafka.clients.consumer" />
