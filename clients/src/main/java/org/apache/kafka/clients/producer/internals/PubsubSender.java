@@ -160,7 +160,7 @@ public class PubsubSender implements Runnable {
         if (guaranteeMessageOrder) {
             // Mute all the partitions drained
             for (List<PubsubBatch> batchList : batches.values()) {
-                for (PubsubBatch batch : batchList)
+                for (PubsubBatch batch : batchList) {
                     synchronized (accumulator) {
                         if (accumulator.isMutedTopic(batch.topic)) {
                             log.info("Another thread got same ordered topic before lock, removing.", batch.topic);
@@ -168,6 +168,7 @@ public class PubsubSender implements Runnable {
                             this.accumulator.muteTopic(batch.topic);
                         }
                     }
+                }
             }
         }
 

@@ -16,15 +16,11 @@ import com.google.pubsub.v1.PublishResponse;
 import io.grpc.inprocess.InProcessChannelBuilder;
 import io.grpc.inprocess.InProcessServerBuilder;
 import org.apache.kafka.clients.producer.RecordMetadata;
-import org.apache.kafka.common.Cluster;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.metrics.MetricConfig;
 import org.apache.kafka.common.metrics.Metrics;
-import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.Errors;
 import org.apache.kafka.common.record.CompressionType;
 import org.apache.kafka.common.utils.MockTime;
-import org.apache.kafka.test.TestUtils;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
@@ -37,11 +33,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
-import static com.sun.org.apache.xalan.internal.xsltc.compiler.util.Type.Node;
-import static org.bouncycastle.crypto.tls.ConnectionEnd.client;
-import static org.bouncycastle.crypto.tls.ConnectionEnd.server;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -159,7 +151,7 @@ public class PubsubSenderTest {
     }
 
     private void eventualReturn(Future<RecordMetadata> future, long waitMillis) {
-        for(int i = 0; i < waitMillis / 50; i++) {
+        for (int i = 0; i < waitMillis / 50; i++) {
             try {
                 if (future.get() != null) {
                     return;
@@ -177,7 +169,7 @@ public class PubsubSenderTest {
     }
 
     private void waitForUnmute(String topic, long waitMillis) {
-        for(int i = 0; i < waitMillis / 50; i++) {
+        for (int i = 0; i < waitMillis / 50; i++) {
             if (!accumulator.isMutedTopic(topic)) {
                 return;
             }

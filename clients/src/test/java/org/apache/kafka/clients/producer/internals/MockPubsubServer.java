@@ -19,9 +19,6 @@ import io.grpc.stub.StreamObserver;
 import java.util.LinkedList;
 import java.util.Queue;
 
-import static org.bouncycastle.asn1.x500.style.RFC4519Style.l;
-import static org.bouncycastle.crypto.tls.CipherType.stream;
-
 public class MockPubsubServer extends PublisherGrpc.PublisherImplBase {
     private Queue<StreamObserver<PublishResponse>> responseList;
 
